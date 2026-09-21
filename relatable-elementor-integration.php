@@ -29,6 +29,9 @@ if ( file_exists( $puc_file ) ) {
 		'relatable-elementor-integration'
 	);
 
+	// Install updates from the release ZIP built by the GitHub Action
+	$relatableUpdateChecker->getVcsApi()->enableReleaseAssets();
+
 	// Optional: Set the branch that contains the stable release. 
 	// Uncomment and modify the line below if you use a specific branch like 'main' or 'master'
 	// $relatableUpdateChecker->setBranch('main');
