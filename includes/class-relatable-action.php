@@ -90,9 +90,10 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 	 */
 	public function run( $record, $ajax_handler ) {
 		$settings = $record->get( 'form_settings' );
-		$api_key  = get_option( 'relatable_api_key' );
+		$api_key  = Relatable_Elementor_Integration::get_api_key();
 
 		if ( empty( $api_key ) ) {
+			$ajax_handler->add_admin_error_message( esc_html__( 'Relatable CRM: API key is not configured.', 'relatable-elementor' ) );
 			return;
 		}
 
@@ -108,7 +109,8 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 		};
 
 		$email = sanitize_email( $get_field_val( 'relatable_email_field' ) );
-		if ( empty( $email ) ) {
+		if ( empty( $email ) || ! is_email( $email ) ) {
+			$ajax_handler->add_admin_error_message( esc_html__( 'Relatable CRM: a valid email address is required.', 'relatable-elementor' ) );
 			return;
 		}
 
@@ -155,7 +157,7 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 		// 3. Determine endpoint and HTTP method based on upsert status
 		if ( $existing_person_id ) {
 			// Update existing contact endpoint: PUT /people/{id}/api_update
-			$endpoint = "{$this->api_base_url}/people/{$existing_person_id}/api_update";
+			$endpoint = "{$this->api_base_url}/people/" . rawurlencode( $existing_person_id ) . '/api_update';
 			$method   = 'PUT';
 		} else {
 			// Create new contact endpoint: POST /people
@@ -164,7 +166,7 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 		}
 
 		// 4. Send Remote API request
-		wp_remote_request(
+		$response = wp_remote_request(
 			$endpoint,
 			[
 				'method'  => $method,
@@ -176,14 +178,36 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 				'timeout' => 15,
 			]
 		);
+
+		// 5. Surface failures to editors and the error log so lost leads are visible
+		if ( is_wp_error( $response ) ) {
+			$this->report_failure( $ajax_handler, $response->get_error_message() );
+			return;
+		}
+
+		$status_code = (int) wp_remote_retrieve_response_code( $response );
+		if ( $status_code < 200 || $status_code >= 300 ) {
+			$body    = json_decode( wp_remote_retrieve_body( $response ), true );
+			$detail  = is_array( $body ) && ! empty( $body['message'] ) ? sanitize_text_field( $body['message'] ) : '';
+			$this->report_failure( $ajax_handler, sprintf( 'HTTP %d%s', $status_code, $detail ? ': ' . $detail : '' ) );
+		}
+	}
+
+	/**
+	 * Log a failed API call and show it to logged-in editors in the form response.
+	 */
+	private function report_failure( $ajax_handler, $detail ) {
+		error_log( 'Relatable CRM Integration: contact sync failed. ' . $detail );
+		$ajax_handler->add_admin_error_message( 'Relatable CRM API Error: ' . $detail );
 	}
 
 	/**
 	 * Query Relatable API to check if a person exists by email
 	 */
 	private function find_person_id_by_email( $email, $api_key ) {
+		// add_query_arg() does not encode new values, so encode explicitly (e.g., "+" in an address)
 		$url = add_query_arg(
-			[ 'query' => $email ],
+			[ 'query' => rawurlencode( $email ) ],
 			"{$this->api_base_url}/people"
 		);
 
@@ -198,7 +222,7 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 			]
 		);
 
-		if ( is_wp_error( $response ) ) {
+		if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
 			return false;
 		}
 
@@ -212,7 +236,9 @@ class Relatable_Elementor_Form_Action extends \ElementorPro\Modules\Forms\Classe
 				if ( ! empty( $person['email_addresses'] ) && is_array( $person['email_addresses'] ) ) {
 					foreach ( $person['email_addresses'] as $email_entry ) {
 						if ( isset( $email_entry['value'] ) && strtolower( trim( $email_entry['value'] ) ) === strtolower( trim( $email ) ) ) {
-							return $person['id'];
+							if ( ! empty( $person['id'] ) && is_scalar( $person['id'] ) ) {
+								return (string) $person['id'];
+							}
 						}
 					}
 				}

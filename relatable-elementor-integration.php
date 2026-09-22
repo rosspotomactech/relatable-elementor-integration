@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Relatable CRM Integration for Elementor Pro
  * Description: Integrates Elementor Pro Forms with Relatable CRM to automatically create or update contacts upon form submission.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Tested up to: 7.0.2
  * Requires PHP: 7.4
  * Author: Potomac Technologies, LLC
@@ -51,6 +51,21 @@ class Relatable_Elementor_Integration {
 		return self::$instance;
 	}
 
+	/**
+	 * Returns the configured API key. A RELATABLE_API_KEY constant in wp-config.php
+	 * takes precedence over the option stored in the database.
+	 */
+	public static function get_api_key() {
+		if ( self::api_key_is_constant() ) {
+			return (string) RELATABLE_API_KEY;
+		}
+		return (string) get_option( 'relatable_api_key', '' );
+	}
+
+	public static function api_key_is_constant() {
+		return defined( 'RELATABLE_API_KEY' ) && '' !== RELATABLE_API_KEY;
+	}
+
 	private function __construct() {
 		// Register Admin Settings Page
 		add_action( 'admin_menu', [ $this, 'add_settings_page' ] );
@@ -82,7 +97,7 @@ class Relatable_Elementor_Integration {
 			'relatable_api_key',
 			[
 				'type'              => 'string',
-				'sanitize_callback' => 'sanitize_text_field',
+				'sanitize_callback' => [ $this, 'sanitize_api_key' ],
 				'default'           => '',
 			]
 		);
@@ -104,13 +119,36 @@ class Relatable_Elementor_Integration {
 	}
 
 	/**
-	 * Render API Key input field
+	 * An empty submission keeps the existing key, so the stored value never has
+	 * to be echoed back into the settings form.
+	 */
+	public function sanitize_api_key( $input ) {
+		$input = sanitize_text_field( (string) $input );
+		if ( '' === $input ) {
+			return (string) get_option( 'relatable_api_key', '' );
+		}
+		return $input;
+	}
+
+	/**
+	 * Render API Key input field. The stored key is never output.
 	 */
 	public function render_api_key_field() {
-		$api_key = get_option( 'relatable_api_key', '' );
+		if ( self::api_key_is_constant() ) {
+			printf(
+				'<input type="password" value="" class="regular-text" disabled placeholder="%s" /><p class="description">%s</p>',
+				esc_attr__( 'Defined in wp-config.php', 'relatable-elementor' ),
+				esc_html__( 'The API key is set by the RELATABLE_API_KEY constant in wp-config.php and cannot be changed here.', 'relatable-elementor' )
+			);
+			return;
+		}
+		$placeholder = get_option( 'relatable_api_key', '' )
+			? __( 'Key is set. Enter a new value to replace it.', 'relatable-elementor' )
+			: __( 'Enter your Relatable API key', 'relatable-elementor' );
 		printf(
-			'<input type="password" name="relatable_api_key" value="%s" class="regular-text" required />',
-			esc_attr( $api_key )
+			'<input type="password" name="relatable_api_key" value="" class="regular-text" autocomplete="new-password" placeholder="%s" /><p class="description">%s</p>',
+			esc_attr( $placeholder ),
+			esc_html__( 'The stored key is never displayed. Leave this field blank to keep the current key. For production sites, define RELATABLE_API_KEY in wp-config.php instead of storing the key in the database.', 'relatable-elementor' )
 		);
 	}
 
